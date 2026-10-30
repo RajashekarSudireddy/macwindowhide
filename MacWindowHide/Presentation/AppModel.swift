@@ -72,12 +72,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Hotkeys and buttons drop a request while another operation runs; `recoveryNeeded` retries full recovery.
     func toggleRecording() async {
-        if coordinator.isRecording || coordinator.phase == .countdown || coordinator.phase == .recoveryNeeded {
-            await coordinator.stopRecording()
-        } else {
-            await coordinator.startRecording(foregroundPID: foregroundPID)
-        }
+        await coordinator.toggleRecording(foregroundPID: foregroundPID)
     }
     func toggle(_ id: SwitchID) async {
         let enabled = !(coordinator.statuses[id]?.isEnabled ?? false)
@@ -185,8 +182,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         NSApplication.shared.terminate(nil)
     }
     func prepareToQuit() async -> Bool {
-        await coordinator.shutdown()
-        guard coordinator.phase != .recoveryNeeded else { return false }
+        guard await coordinator.shutdown() else { return false }
         tickTask?.cancel()
         KeyboardLockController.shared.unlock()
         return true
