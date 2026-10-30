@@ -1,6 +1,15 @@
 # Verification report
 
-Date: 25 October 2026. Host: macOS 27.0.1, Apple silicon. Toolchain: Xcode 27.1, Apple Swift 6.4, Swift 6 language mode, macOS 15 deployment target.
+Date: 31 October 2026 (latest entry). Host: macOS 27.0.1, Apple silicon. Toolchain: Xcode 27.1, Apple Swift 6.4, Swift 6 language mode, macOS 15 deployment target.
+
+## Audit fixes F1–F6 — 31 October 2026
+
+- Fixed audit findings F1–F6 from the 27 October review: the operation guard can no longer be cleared by a refresh started during a countdown; Quit waits for an in-flight operation and then restores, or reports failure; busy and recovery-blocked requests return `false` and App Intents throw `SwitchError.busy` or the pending-recovery issue instead of reporting success; popover "Retry restoration" runs full recovery; a successful retried Quit clears `recoveryNeeded`, and an unreadable journal no longer blocks Quit (the file is left untouched); Keep Awake clock mode never produces a past deadline. No persisted format changed.
+- Added `MacWindowHideTests/AuditRegressionTests.swift` (14 tests, gated fake adapters, temporary data). Against unmodified `main` with signature-only shims, 12 of those tests fail. The 2 that pass are by design: the future-date F6 control and the "short operation is waited for" positive case.
+- `./scripts/test.sh`: **50 tests passed, zero failures**. The only test-target warning is the existing `RetiredControlTests.swift:14` `var intent` notice.
+- `./scripts/build.sh`: **universal Release build and signing succeeded with 0 warnings**.
+- `python3 scripts/test_quit.py`: **passed**.
+- Not run: the integration/native smoke test, packaging, real Shortcuts/Siri invocation, real hotkeys, and any physical device or TCC state. The race windows were forced with fake adapters only.
 
 ## Do Not Disturb removal — 25 October 2026
 

@@ -1,23 +1,25 @@
 # Handoff
 
-Updated: 25 October 2026. This is a snapshot for resuming work; confirm the current checkout and available evidence before acting on it.
+Updated: 31 October 2026. This is a snapshot for resuming work; confirm the current checkout and available evidence before acting on it.
 
 ## Goal and current state
 
-The project lives at `~/Desktop/Personal Projects/macwindowhide`, and Codex is using that folder. **Do Not Disturb has been removed completely from active app functionality**, including controls, Recording Mode selections/defaults, Settings, hotkeys, App Intents choices, the adapter and bundled helper/setup files. The verified build is installed at `/Applications/MacWindowHide.app` and has been restarted to preserve the user's existing Dark Mode timer. Dated execution evidence is recorded in [VERIFICATION.md](docs/VERIFICATION.md).
+Current goal: fix audit findings F1–F6 from the 27 October review (`macwindowhide-audit-2026-10-27.md`) on branch `ao/audit-fixes/fix-f1-f6` and open one pull request against `main` for review. Do not merge it without review. F7–F13 from the same audit are intentionally not addressed here.
 
-MacWindowHide implements a local, personal macOS menu bar utility with Recording Mode, fourteen controls, restoration, timers, backdrops, menu bar organization and automation entry points. A universal app and DMG have been built. This is an implementation ready for continued validation, not a claim that every hardware/OS combination has been exercised.
+Completed on that branch:
 
-The removal passed 36 hosted tests, a clean universal Release build, strict signature checks, installer rebuild/verification, exported metadata checks and Quit process-exit checks. A temporary preview with a distinct bundle ID allowed native inspection after the UI tool timed out attaching to the main app: Permissions, Recording Mode and Shortcuts contain no DND option, and the preview quit normally. Previous installed app backup: `/private/tmp/MacWindowHide-before-dnd-removal-vs1g8hd0/MacWindowHide.app`. The updater preserved personal recovery data byte-for-byte; the restarted app still owns the same Dark Mode timer.
+- Reworked the coordinator operation guard (F1). Busy and recovery-blocked entrypoints now return `false` (F3), and App Intents use `AutomationRequest` to report them as failures.
+- `shutdown()` now waits, restores and returns a result (F2, F5). Popover "Retry restoration" now runs `recover()` (F4). Keep Awake clock mode now uses the next occurrence of the chosen time (F6).
+- Added 14 regression tests in `MacWindowHideTests/AuditRegressionTests.swift`. ARCHITECTURE.md now documents the new busy-entrypoint, Quit and clock-mode contracts. Dated evidence is in [VERIFICATION.md](docs/VERIFICATION.md).
 
-Old `doNotDisturb` values are decode-only and excluded from all active entrypoints. Settings filter old selections; journals preserve snapshots and deadlines as inactive evidence. No Focus helper is invoked and current macOS Focus is left unchanged. See the compatibility contract in [ARCHITECTURE.md](ARCHITECTURE.md).
+The installed `/Applications/MacWindowHide.app` was **not** updated by this work.
 
-The earlier Quit and **Allow System Events control** fixes are retained. Fresh-consent and previously-denied native TCC states remain untested. The optional personal `project-docs` skill remains installed outside this repository; its disposable `build/skill-validation-venv` still embeds the old location and should be recreated if needed.
+MacWindowHide implements a local, personal macOS menu bar utility with Recording Mode, fourteen controls, restoration, timers, backdrops, menu bar organization and automation entry points. Do Not Disturb was removed on 25 October; old `doNotDisturb` values remain decode-only (see [ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ## Start here
 
 1. Read [AGENTS.md](AGENTS.md) for working rules and required checks.
-2. Inspect `git status --short --branch`. At this handoff, `main` has **no commits** and the implementation/docs are untracked. An empty `git diff` would omit that work; preserve existing files and do not assume a clean or empty project.
+2. Inspect `git status --short --branch`. `main` has an initial commit and an `origin` remote on GitHub; the audit fixes are on `ao/audit-fixes/fix-f1-f6` pending review.
 3. Read the relevant section of [ARCHITECTURE.md](ARCHITECTURE.md) before changing a subsystem. Use [README.md](README.md) for build/run commands.
 4. Choose the next task from the current user request. The recommendations below describe a continuation order when further app verification is requested.
 
@@ -27,6 +29,7 @@ The authoritative coverage and remaining-check matrix is [docs/VERIFICATION.md](
 
 | Evidence | Recorded result | Location |
 | --- | --- | --- |
+| Audit fixes F1–F6 | 50 hosted tests, clean universal Release build (0 warnings) and Quit check passed on 31 October. | `docs/VERIFICATION.md` |
 | Release build | Clean universal compilation, signing and metadata export succeeded without DND resources. | `build/build-release-remove-dnd.log` |
 | Unit tests | All 36 hosted tests passed, including compatibility and mixed recovery. | `build/tests-remove-dnd.log` |
 | Quit regression | Real lifecycle check passed for the new build and installed copy. | `build/quit-remove-dnd.log`, `build/install-remove-dnd.log` |
@@ -38,7 +41,7 @@ The permission fix was also inspected in the new Release Settings window with is
 
 ## Recommended next work
 
-Git still has no commits or configured remote. The updated app is already installed and running. Next concrete action: validate the remaining entry points and permission-dependent controls below. Recording Mode no longer requires DND helpers. Preserve existing TCC permissions; do not reset them merely to test.
+Next concrete action: get the F1–F6 pull request reviewed and address its feedback. Then decide whether to fix F7–F13 from the audit. After merge, rebuild and package before updating the installed app. Then validate the entry points and permission-dependent controls below; Shortcuts busy and recovery reporting is a new item to check. Recording Mode no longer requires DND helpers. Preserve existing TCC permissions; do not reset them merely to test.
 
 1. **Validate user entry points on this Mac.** Use an installed Applications copy and test the menu bar popover, Option-click, global recording hotkey and Shortcuts/Siri actions. Complete when start/restore behavior and visible states agree with the selected profile and all changed resources return to the expected state.
 2. **Validate permission-dependent controls.** Follow the verification matrix. Exercise granted/denied/revoked access and record actual outcomes and restoration behavior.
