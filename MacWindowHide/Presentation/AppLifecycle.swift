@@ -131,15 +131,12 @@ import SwiftUI
         guard !quitting else { return .terminateNow }
         guard NSClassFromString("XCTestCase") == nil else { return .terminateNow }
         guard terminationTask == nil else { return .terminateCancel }
-        guard !model.coordinator.isBusy || model.coordinator.phase == .countdown else {
-            model.message = "Wait for the current operation to finish before quitting."
-            return .terminateCancel
-        }
+        // shutdown() waits for a running operation, then restores; it reports failure instead of skipping restoration.
         terminationTask = Task {
             if !(await model.prepareToQuit()) {
                 terminationTask = nil
                 openSettings()
-                model.message = "Some settings could not be restored. Retry recovery before quitting; the journal remains on disk."
+                model.message = (model.coordinator.issue.map { $0 + "\n\n" } ?? "") + "Retry recovery before quitting; the journal remains on disk."
             } else {
                 quitting = true
                 sender.terminate(nil)

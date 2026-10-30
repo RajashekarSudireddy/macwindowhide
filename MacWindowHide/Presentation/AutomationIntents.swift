@@ -21,8 +21,7 @@ struct StartRecordingIntent: AppIntent {
     static var openAppWhenRun: Bool { true }
     @MainActor func perform() async throws -> some IntentResult {
         let model = AppModel.shared
-        await model.coordinator.startRecording(foregroundPID: model.foregroundPID)
-        if !model.coordinator.isRecording { throw SwitchError.failed(model.coordinator.issue ?? "Recording Mode did not start.") }
+        try await AutomationRequest.startRecording(model.coordinator, foregroundPID: model.foregroundPID)
         return .result()
     }
 }
@@ -30,9 +29,7 @@ struct StopRecordingIntent: AppIntent {
     static var title: LocalizedStringResource { "Restore Recording Mode" }
     static var openAppWhenRun: Bool { true }
     @MainActor func perform() async throws -> some IntentResult {
-        let coordinator = AppModel.shared.coordinator
-        await coordinator.stopRecording()
-        if coordinator.phase == .recoveryNeeded { throw SwitchError.failed(coordinator.issue ?? "Some changes still need restoration.") }
+        try await AutomationRequest.stopRecording(AppModel.shared.coordinator)
         return .result()
     }
 }
@@ -48,12 +45,12 @@ struct SetControlIntent: AppIntent {
             throw SwitchError.unavailable("Screen Saver is a start-only action. Interact with the Mac to dismiss it.")
         }
         let model = AppModel.shared
-        switch operation {
-        case .toggle: await model.toggle(control)
-        case .on: await model.set(control, enabled: true)
-        case .off: await model.set(control, enabled: false)
+        let enabled: Bool? = switch operation {
+        case .toggle: nil
+        case .on: true
+        case .off: false
         }
-        if let issue = model.coordinator.issue { throw SwitchError.failed(issue) }
+        try await AutomationRequest.setSwitch(model.coordinator, control, enabled: enabled, foregroundPID: model.foregroundPID)
         return .result()
     }
 }
