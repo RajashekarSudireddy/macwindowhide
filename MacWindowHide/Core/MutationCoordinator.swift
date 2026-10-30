@@ -24,6 +24,7 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
     private var journal = MutationJournal()
     private var loadFailed = false
     private var operationInFlight = false
+    private var shuttingDown = false
     private var countdownToken = UUID()
     private var tickInFlight = false
     private var lastRefresh = Date.distantPast
@@ -49,11 +50,31 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
 
     func remaining(for id: SwitchID) -> TimeInterval? { timers[id].map { max(0, $0.timeIntervalSince(now)) } }
 
-    func startRecording(foregroundPID: Int32? = nil) async {
-        guard phase == .idle, !operationInFlight else { return }
+    /// The error an automation entrypoint reports when the coordinator refused its request.
+    var refusalError: SwitchError {
+        if shuttingDown { return .failed("MacWindowHide is quitting.") }
+        if phase == .recoveryNeeded && !isBusy {
+            return .failed(issue ?? "Changes from an earlier session still need restoration. Try again after restoration finishes.")
+        }
+        return .busy
+    }
+
+    /// Entrypoints return `false` when they refuse a request because another operation, quitting or
+    /// unresolved recovery blocks it. They return `true` when the request ran, including a no-op.
+    @discardableResult func toggleRecording(foregroundPID: Int32? = nil) async -> Bool {
+        switch phase {
+        case .recoveryNeeded: return await recover()
+        case .active, .countdown: return await stopRecording()
+        default: return await startRecording(foregroundPID: foregroundPID)
+        }
+    }
+
+    @discardableResult func startRecording(foregroundPID: Int32? = nil) async -> Bool {
+        if phase == .active { return true }
+        guard phase == .idle, !operationInFlight, !shuttingDown else { return false }
         issue = nil
         let selected = orderedRecordingSwitches()
-        guard !selected.isEmpty else { issue = "Choose at least one switch in Recording Mode settings."; return }
+        guard !selected.isEmpty else { issue = "Choose at least one switch in Recording Mode settings."; return true }
         operationInFlight = true
         var unavailable: [String] = []
         for id in selected {
@@ -64,8 +85,9 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         guard unavailable.isEmpty else {
             issue = "Recording Mode could not start.\n" + unavailable.joined(separator: "\n")
             await refresh()
-            return
+            return true
         }
+        guard !shuttingDown else { return false }
 
         if settings.preferences.countdownEnabled {
             let token = UUID()
@@ -74,12 +96,18 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
             for value in stride(from: 3, through: 1, by: -1) {
                 countdownRemaining = value
                 do { try await Task.sleep(for: .seconds(1)) }
-                catch { if countdownToken == token { phase = .idle; countdownRemaining = 0 }; return }
-                guard countdownToken == token, phase == .countdown else { return }
+                catch { if countdownToken == token { phase = .idle; countdownRemaining = 0 }; return true }
+                guard countdownToken == token, phase == .countdown else { return true }
             }
             countdownRemaining = 0
         }
-        guard phase == .idle || phase == .countdown else { return }
+        guard phase == .idle || phase == .countdown else { return true }
+        // Never take over a guard that another operation holds: its exit would clear the flag mid-preparation.
+        guard !operationInFlight, !shuttingDown else {
+            if phase == .countdown { phase = .idle }
+            issue = "Recording Mode did not start because another operation was still running. No changes were made."
+            return false
+        }
         operationInFlight = true
         phase = .preparing
         defer { operationInFlight = false }
@@ -110,16 +138,18 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
             phase = errors.isEmpty ? .idle : .recoveryNeeded
             issue = "Recording Mode could not start: \(failure)" + (errors.isEmpty ? " All completed changes were restored." : "\n" + errors.joined(separator: "\n"))
         }
+        return true
     }
 
-    func stopRecording() async {
+    @discardableResult func stopRecording() async -> Bool {
         if phase == .countdown {
-            countdownToken = UUID()
-            countdownRemaining = 0
-            phase = .idle
-            return
+            cancelCountdown()
+            return true
         }
-        guard !operationInFlight, journal.session != nil || journal.changes.contains(where: { $0.owner == .recording }) else { return }
+        // Unresolved recovery can include standalone records; only full recovery may clear it.
+        if phase == .recoveryNeeded { return await recover() }
+        guard !operationInFlight, !shuttingDown else { return false }
+        guard journal.session != nil || journal.changes.contains(where: { $0.owner == .recording }) else { return true }
         operationInFlight = true
         phase = .restoring
         defer { operationInFlight = false }
@@ -128,20 +158,23 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         issue = errors.isEmpty ? nil : errors.joined(separator: "\n")
         await processExpiredTimers()
         await updateStatuses()
+        return true
     }
 
-    func setSwitch(_ id: SwitchID, enabled: Bool, foregroundPID: Int32? = nil) async {
-        guard !isBusy, phase != .recoveryNeeded else { return }
+    @discardableResult func setSwitch(_ id: SwitchID, enabled: Bool, foregroundPID: Int32? = nil) async -> Bool {
+        guard !isBusy, !shuttingDown, phase != .recoveryNeeded else { return false }
         operationInFlight = true
         defer { operationInFlight = false }
         issue = nil
         do { try await performStandalone(id, enabled: enabled, foregroundPID: foregroundPID, manual: true) }
         catch { issue = "\(id.title): \(error.localizedDescription)" }
         await updateStatuses()
+        return true
     }
 
-    func scheduleAutoOff(_ id: SwitchID, date: Date) async {
-        guard id.supportsTimer, !isBusy, phase != .recoveryNeeded, let adapter = adapters[id] else { return }
+    @discardableResult func scheduleAutoOff(_ id: SwitchID, date: Date) async -> Bool {
+        guard id.supportsTimer, let adapter = adapters[id] else { return true }
+        guard !isBusy, !shuttingDown, phase != .recoveryNeeded else { return false }
         operationInFlight = true
         defer { operationInFlight = false }
         do {
@@ -153,6 +186,7 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
             journal.timers[id.rawValue] = date
             try persist()
         } catch { issue = "The timer could not be saved: \(error.localizedDescription)" }
+        return true
     }
 
     func cancelAutoOff(_ id: SwitchID) {
@@ -171,8 +205,9 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         do { try persist() } catch { issue = "The time extension could not be saved: \(error.localizedDescription)" }
     }
 
-    func refresh() async {
-        guard !operationInFlight else { return }
+    @discardableResult func refresh() async -> Bool {
+        // A countdown is busy too: a refresh started then could still hold the guard when preparation begins.
+        guard !isBusy, !shuttingDown else { return false }
         operationInFlight = true
         defer { operationInFlight = false }
         await updateStatuses()
@@ -190,16 +225,17 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         }
         if changed { do { try persist() } catch { issue = error.localizedDescription } }
         lastRefresh = Date()
+        return true
     }
 
-    func recover() async {
-        guard !operationInFlight else { return }
+    @discardableResult func recover() async -> Bool {
+        guard !isBusy, !shuttingDown else { return false }
         operationInFlight = true
         phase = .restoring
         defer { operationInFlight = false }
         // Reload the durable state: a previous final save can fail after an OS operation.
         do { journal = try store.load(); loadFailed = false; syncPublishedJournal() }
-        catch { phase = .recoveryNeeded; issue = "Recovery data could not be read: \(error.localizedDescription)"; return }
+        catch { loadFailed = true; phase = .recoveryNeeded; issue = "Recovery data could not be read: \(error.localizedDescription)"; return true }
         var errors = await restoreRecordingChanges()
         for change in journal.changes.reversed() where change.owner == .standalone {
             guard let adapter = adapters[change.switchID] else { errors.append("\(change.switchID.title): the recovery adapter is missing."); continue }
@@ -231,11 +267,12 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         if errors.isEmpty { await processExpiredTimers() }
         issue = errors.isEmpty ? nil : "Some changes still need recovery:\n" + errors.joined(separator: "\n")
         await updateStatuses()
+        return true
     }
 
     func tick() async {
         now = Date()
-        guard !tickInFlight, !isBusy, phase != .recoveryNeeded else { return }
+        guard !tickInFlight, !isBusy, !shuttingDown, phase != .recoveryNeeded else { return }
         // System queries are needed only while a recording or an auto-off timer is owned.
         guard phase == .active || !timers.isEmpty else { return }
         tickInFlight = true
@@ -247,11 +284,39 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         if Date().timeIntervalSince(lastRefresh) >= 3 { await refresh() }
     }
 
-    func shutdown() async {
-        await stopRecording()
-        guard !operationInFlight else { return }
+    /// Restores recording and transient standalone changes before Quit. Returns `true` only when the
+    /// process may exit: everything it owns was restored, or it never read the journal and changed nothing.
+    /// After success, new operations stay refused until the process exits.
+    func shutdown(waitLimit: Duration = .seconds(20)) async -> Bool {
+        shuttingDown = true
+        if phase == .countdown { cancelCountdown() }
+        // Wait for the operation that holds the guard; new operations are refused while shutting down.
+        let deadline = ContinuousClock.now.advanced(by: waitLimit)
+        while operationInFlight {
+            guard ContinuousClock.now < deadline else {
+                shuttingDown = false
+                issue = "Quit was cancelled because another operation did not finish. Nothing was restored yet; try Quit again."
+                return false
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        if loadFailed {
+            // Mutations are refused while the journal is unreadable. If this process owns nothing, it may exit;
+            // the unreadable file is left untouched as evidence for the next launch.
+            guard journal.session == nil, journal.changes.isEmpty else {
+                shuttingDown = false
+                issue = "Recovery data could not be read, so changes made earlier in this session cannot be restored safely. The journal remains on disk."
+                return false
+            }
+            for adapter in adapters.values { adapter.shutdown() }
+            return true
+        }
         operationInFlight = true
         var errors: [String] = []
+        if journal.session != nil || journal.changes.contains(where: { $0.owner == .recording }) {
+            phase = .restoring
+            errors += await restoreRecordingChanges()
+        }
         for change in journal.changes.reversed() where change.owner == .standalone && transient.contains(change.switchID) {
             do {
                 try await restoreChange(change)
@@ -261,10 +326,21 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         }
         for adapter in adapters.values { adapter.shutdown() }
         operationInFlight = false
-        if !errors.isEmpty {
-            phase = .recoveryNeeded
-            issue = "Some changes could not be restored before quitting:\n" + errors.joined(separator: "\n")
+        let unresolved = journal.session != nil || journal.changes.contains { $0.owner == .recording || $0.phase != .committed }
+        if errors.isEmpty && !unresolved {
+            if phase == .restoring || phase == .recoveryNeeded { phase = .idle; issue = nil }
+            return true
         }
+        shuttingDown = false
+        phase = .recoveryNeeded
+        issue = errors.isEmpty ? "Some changes still need recovery before quitting." : "Some changes could not be restored before quitting:\n" + errors.joined(separator: "\n")
+        return false
+    }
+
+    private func cancelCountdown() {
+        countdownToken = UUID()
+        countdownRemaining = 0
+        phase = .idle
     }
 
     private func performStandalone(_ id: SwitchID, enabled: Bool, foregroundPID: Int32?, manual: Bool) async throws {
@@ -322,12 +398,21 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         if id == .keepAwake {
             switch settings.preferences.awakeTimerMode {
             case .indefinite: return nil
-            case .clock: return settings.preferences.awakeUntil
+            case .clock: return nextClockDeadline(settings.preferences.awakeUntil)
             case .duration: return Date().addingTimeInterval(Double(max(1, settings.preferences.keepAwakeMinutes)) * 60)
             }
         }
         guard let minutes = settings.preferences.autoOffMinutes[id.rawValue], minutes > 0 else { return nil }
         return Date().addingTimeInterval(Double(minutes) * 60)
+    }
+
+    /// A future stored date is used as chosen. A date that has passed means the same time of day at its next occurrence.
+    private func nextClockDeadline(_ stored: Date, now: Date = Date()) -> Date {
+        guard stored <= now else { return stored }
+        let calendar = Calendar.current
+        let time = calendar.dateComponents([.hour, .minute], from: stored)
+        return calendar.nextDate(after: now, matching: DateComponents(hour: time.hour, minute: time.minute, second: 0), matchingPolicy: .nextTime)
+            ?? now.addingTimeInterval(86_400)
     }
 
     private func restoreRecordingChanges() async -> [String] {

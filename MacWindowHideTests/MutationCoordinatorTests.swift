@@ -181,7 +181,8 @@ import XCTest
         defer { try? FileManager.default.removeItem(at: settings.directory) }
         await coordinator.setSwitch(.otherApps, enabled: true)
         XCTAssertTrue(adapters[0].enabled)
-        await coordinator.shutdown()
+        let mayQuit = await coordinator.shutdown()
+        XCTAssertTrue(mayQuit)
         XCTAssertFalse(adapters[0].enabled)
         XCTAssertTrue((try? store.load().changes.isEmpty) == true)
     }
@@ -215,7 +216,8 @@ import XCTest
         adapters.forEach { $0.log = log }
         await coordinator.setSwitch(.otherApps, enabled: true)
         await coordinator.startRecording()
-        await coordinator.shutdown()
+        let mayQuit = await coordinator.shutdown()
+        XCTAssertTrue(mayQuit)
         XCTAssertEqual(coordinator.phase, .idle)
         XCTAssertFalse(adapters.contains(where: \.enabled))
         XCTAssertTrue(try store.load().changes.isEmpty)
@@ -227,12 +229,14 @@ import XCTest
         defer { try? FileManager.default.removeItem(at: settings.directory) }
         await coordinator.setSwitch(.otherApps, enabled: true)
         adapters[0].failRestore = true
-        await coordinator.shutdown()
+        let mayQuit = await coordinator.shutdown()
+        XCTAssertFalse(mayQuit)
         XCTAssertEqual(coordinator.phase, .recoveryNeeded)
         XCTAssertEqual(try store.load().changes.count, 1)
         XCTAssertTrue(coordinator.issue?.contains("simulated restore failure") == true)
         adapters[0].failRestore = false
-        await coordinator.shutdown()
+        let retried = await coordinator.shutdown()
+        XCTAssertTrue(retried)
         XCTAssertTrue(try store.load().changes.isEmpty)
     }
 
