@@ -239,6 +239,17 @@ import XCTest
         XCTAssertTrue(c.issue?.contains("could not turn off") == true, c.issue ?? "nil")
         XCTAssertTrue(a[0].enabled)
         XCTAssertNotNil(try store.load().timers[SwitchID.darkMode.rawValue])
+        // The recording session is gone now; a retried Quit must still retry the off action.
+        let retryWhileFailing = await c.shutdown()
+        XCTAssertFalse(retryWhileFailing)
+        XCTAssertTrue(a[0].enabled)
+        XCTAssertNotNil(try store.load().timers[SwitchID.darkMode.rawValue])
+        a[0].failApplyOff = false
+        let retryAfterFix = await c.shutdown()
+        XCTAssertTrue(retryAfterFix)
+        XCTAssertFalse(a[0].enabled)
+        XCTAssertTrue(c.timers.isEmpty)
+        XCTAssertTrue(try store.load().timers.isEmpty)
     }
 
     // F5 review: a repeated Quit after a failed final journal write must not succeed while storage still fails.

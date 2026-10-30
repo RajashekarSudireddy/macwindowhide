@@ -316,9 +316,10 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         if journal.session != nil || journal.changes.contains(where: { $0.owner == .recording }) {
             phase = .restoring
             errors += await restoreRecordingChanges()
-            // Timers deferred while recording owned their switch are due now that ownership is released.
-            if errors.isEmpty { errors += await processExpiredTimers() }
         }
+        // Due timers, including those deferred while recording owned their switch, run on every Quit attempt
+        // so a failed off action is retried rather than skipped once the recording session is gone.
+        if errors.isEmpty { errors += await processExpiredTimers() }
         for change in journal.changes.reversed() where change.owner == .standalone && transient.contains(change.switchID) {
             do {
                 try await restoreChange(change)
