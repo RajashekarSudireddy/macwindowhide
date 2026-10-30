@@ -206,6 +206,41 @@ import XCTest
         XCTAssertTrue(try store.load().changes.isEmpty)
     }
 
+    // F2 review: a standalone timer that expired while recording owned the switch is processed before Quit.
+    func testF2_ShutdownProcessesTimerDeferredDuringRecording() async throws {
+        let (settings, a, c, store) = make([.darkMode])
+        defer { try? FileManager.default.removeItem(at: settings.directory) }
+        settings.preferences.autoOffMinutes[SwitchID.darkMode.rawValue] = 30
+        await c.setSwitch(.darkMode, enabled: true)
+        await c.scheduleAutoOff(.darkMode, date: Date().addingTimeInterval(-1))
+        await c.startRecording()
+        await c.tick()
+        XCTAssertTrue(a[0].enabled, "The expired timer is deferred while recording owns Dark Mode")
+        let mayQuit = await c.shutdown()
+        XCTAssertTrue(mayQuit)
+        XCTAssertFalse(a[0].enabled)
+        XCTAssertTrue(c.timers.isEmpty)
+        let journal = try store.load()
+        XCTAssertTrue(journal.timers.isEmpty)
+        XCTAssertTrue(journal.changes.isEmpty)
+    }
+
+    // F2 review: if that deferred timer cannot turn its switch off, Quit is refused and the timer stays durable.
+    func testF2_ShutdownRefusesQuitWhenDeferredTimerFails() async throws {
+        let (settings, a, c, store) = make([.darkMode])
+        defer { try? FileManager.default.removeItem(at: settings.directory) }
+        settings.preferences.autoOffMinutes[SwitchID.darkMode.rawValue] = 30
+        await c.setSwitch(.darkMode, enabled: true)
+        await c.scheduleAutoOff(.darkMode, date: Date().addingTimeInterval(-1))
+        await c.startRecording()
+        a[0].failApplyOff = true
+        let mayQuit = await c.shutdown()
+        XCTAssertFalse(mayQuit)
+        XCTAssertTrue(c.issue?.contains("could not turn off") == true, c.issue ?? "nil")
+        XCTAssertTrue(a[0].enabled)
+        XCTAssertNotNil(try store.load().timers[SwitchID.darkMode.rawValue])
+    }
+
     // F5 [K]: once a retried Quit restores everything, Quit is allowed again.
     func testF5_SuccessfulRetryShutdownClearsRecoveryNeeded() async throws {
         let (settings, a, c, store) = make([.otherApps])
@@ -280,6 +315,7 @@ private extension Date {
     var applyCount = 0
     var restoreCount = 0
     var failRestore = false
+    var failApplyOff = false
     var gateStatus = false
     var gateApply = false
     private(set) var waiting = false
@@ -295,6 +331,7 @@ private extension Date {
     func snapshot() async throws -> ResourceSnapshot { ResourceSnapshot(["enabled": String(enabled), "value": value]) }
     func apply(enabled: Bool, context: ActionContext) async throws {
         if gateApply { gateApply = false; await gate() }
+        if failApplyOff && !enabled { throw SwitchError.failed("simulated apply failure") }
         applyCount += 1
         self.enabled = enabled
         value = enabled ? "on" : "off"

@@ -10,7 +10,7 @@ Completed on that branch:
 
 - Reworked the coordinator operation guard (F1). Busy and recovery-blocked entrypoints now return `false` (F3), and App Intents use `AutomationRequest` to report them as failures.
 - `shutdown()` now waits, restores and returns a result (F2, F5). Popover "Retry restoration" now runs `recover()` (F4). Keep Awake clock mode now uses the next occurrence of the chosen time (F6).
-- Added 14 regression tests in `MacWindowHideTests/AuditRegressionTests.swift`. ARCHITECTURE.md now documents the new busy-entrypoint, Quit and clock-mode contracts. Dated evidence is in [VERIFICATION.md](docs/VERIFICATION.md).
+- Added 16 regression tests in `MacWindowHideTests/AuditRegressionTests.swift`. ARCHITECTURE.md now documents the new busy-entrypoint, Quit and clock-mode contracts. Dated evidence is in [VERIFICATION.md](docs/VERIFICATION.md).
 
 The installed `/Applications/MacWindowHide.app` was **not** updated by this work.
 
@@ -29,7 +29,7 @@ The authoritative coverage and remaining-check matrix is [docs/VERIFICATION.md](
 
 | Evidence | Recorded result | Location |
 | --- | --- | --- |
-| Audit fixes F1–F6 | 50 hosted tests, clean universal Release build (0 warnings) and Quit check passed on 31 October. | `docs/VERIFICATION.md` |
+| Audit fixes F1–F6 | 52 hosted tests, clean universal Release build (0 warnings) and Quit check passed on 31 October. | `docs/VERIFICATION.md` |
 | Release build | Clean universal compilation, signing and metadata export succeeded without DND resources. | `build/build-release-remove-dnd.log` |
 | Unit tests | All 36 hosted tests passed, including compatibility and mixed recovery. | `build/tests-remove-dnd.log` |
 | Quit regression | Real lifecycle check passed for the new build and installed copy. | `build/quit-remove-dnd.log`, `build/install-remove-dnd.log` |

@@ -316,6 +316,8 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         if journal.session != nil || journal.changes.contains(where: { $0.owner == .recording }) {
             phase = .restoring
             errors += await restoreRecordingChanges()
+            // Timers deferred while recording owned their switch are due now that ownership is released.
+            if errors.isEmpty { errors += await processExpiredTimers() }
         }
         for change in journal.changes.reversed() where change.owner == .standalone && transient.contains(change.switchID) {
             do {
@@ -450,7 +452,9 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
         try persist()
     }
 
-    private func processExpiredTimers() async {
+    /// Turns off switches whose standalone timer expired. Returns the failures, which are also published as `issue`.
+    @discardableResult private func processExpiredTimers() async -> [String] {
+        var errors: [String] = []
         for (id, deadline) in timers where deadline <= Date() {
             let recordingOwns = journal.changes.contains { $0.switchID == id && $0.owner == .recording }
             if recordingOwns && id != .keepAwake { continue }
@@ -463,8 +467,13 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
                     continue
                 }
                 try await performStandalone(id, enabled: false, foregroundPID: nil, manual: false)
-            } catch { issue = "\(id.title) could not turn off: \(error.localizedDescription)" }
+            } catch {
+                let failure = "\(id.title) could not turn off: \(error.localizedDescription)"
+                errors.append(failure)
+                issue = failure
+            }
         }
+        return errors
     }
 
     private func orderedRecordingSwitches() -> [SwitchID] {
