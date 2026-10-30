@@ -327,6 +327,11 @@ enum RecordingPhase: String { case idle, countdown, preparing, active, restoring
             } catch { errors.append("\(change.switchID.title): \(error.localizedDescription)") }
         }
         for adapter in adapters.values { adapter.shutdown() }
+        // The in-memory journal can be ahead of a failed final write (a restored change or cleared session).
+        // Exit only after the reconciled state is durable, so a stale record cannot be replayed at next launch.
+        if errors.isEmpty {
+            do { try persist() } catch { errors.append("Recovery journal: \(error.localizedDescription)") }
+        }
         operationInFlight = false
         let unresolved = journal.session != nil || journal.changes.contains { $0.owner == .recording || $0.phase != .committed }
         if errors.isEmpty && !unresolved {

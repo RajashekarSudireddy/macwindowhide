@@ -241,6 +241,29 @@ import XCTest
         XCTAssertNotNil(try store.load().timers[SwitchID.darkMode.rawValue])
     }
 
+    // F5 review: a repeated Quit after a failed final journal write must not succeed while storage still fails.
+    func testF5_RepeatedQuitAfterFinalSaveFailureWaitsForDurableJournal() async throws {
+        let (settings, a, c, store) = make([.otherApps])
+        defer { try? FileManager.default.removeItem(at: settings.directory) }
+        await c.setSwitch(.otherApps, enabled: true)
+        var writes = 0
+        // Allow the "restoring" mark, then fail every later write, including the final removal.
+        store.beforeSave = { writes += 1; if writes >= 2 { throw SwitchError.failed("simulated disk failure") } }
+        let first = await c.shutdown()
+        XCTAssertFalse(first)
+        XCTAssertFalse(a[0].enabled, "The app was restored; only the journal write failed")
+        let second = await c.shutdown()
+        XCTAssertFalse(second, "Quit must not succeed while the reconciled journal is not durable")
+        XCTAssertEqual(c.phase, .recoveryNeeded)
+        XCTAssertTrue(c.issue?.contains("simulated disk failure") == true, c.issue ?? "nil")
+        XCTAssertEqual(try store.load().changes.count, 1, "The stale record is still on disk")
+        store.beforeSave = nil
+        let third = await c.shutdown()
+        XCTAssertTrue(third)
+        XCTAssertEqual(c.phase, .idle)
+        XCTAssertTrue(try store.load().changes.isEmpty)
+    }
+
     // F5 [K]: once a retried Quit restores everything, Quit is allowed again.
     func testF5_SuccessfulRetryShutdownClearsRecoveryNeeded() async throws {
         let (settings, a, c, store) = make([.otherApps])
